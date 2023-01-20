@@ -429,7 +429,7 @@ class LongitudinalMpc:
     else:
       self.crash_cnt = 0
 
-    # 设置source，表示和哪个前车信息可能产生不舒适的刹车，该信息后续只用于UI显示
+    # 设置source，表示速度限制来自哪个前车，该信息后续只用于UI显示
     # Check if it got within lead comfort range
     # TODO This should be done cleaner
     if self.mode == 'blended':
