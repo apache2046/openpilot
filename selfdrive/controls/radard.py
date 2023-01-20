@@ -34,26 +34,29 @@ class KalmanParams():
           0.26393339, 0.26278425]
     self.K = [[interp(dt, dts, K0)], [interp(dt, dts, K1)]]
 
-
+# 这里应该是pdf， 拉普拉斯分布的概率密度
 def laplacian_cdf(x, mu, b):
   b = max(b, 1e-4)
   return math.exp(-abs(x-mu)/b)
 
-
 def match_vision_to_cluster(v_ego, lead, clusters):
+  # lead中是openpilot使用图像计算的前车信息，而comma设备在前风挡上，比ACC雷达靠后，所以减去一个车头长度与雷达数据对齐
   # match vision point to best statistical cluster match
   offset_vision_dist = lead.x[0] - RADAR_TO_CAMERA
 
   def prob(c):
+    # 以视觉感知的数据作为mu，std得到分布，然后计算雷达数据在此分布下的概率密度值
     prob_d = laplacian_cdf(c.dRel, offset_vision_dist, lead.xStd[0])
     prob_y = laplacian_cdf(c.yRel, -lead.y[0], lead.yStd[0])
     prob_v = laplacian_cdf(c.vRel + v_ego, lead.v[0], lead.vStd[0])
-
+    
     # This is isn't exactly right, but good heuristic
     return prob_d * prob_y * prob_v
 
+  # 使用prob值，从若干个雷达数据中找到和视觉感知数据重合度最高的那个
   cluster = max(clusters, key=prob)
 
+  # 过滤掉视觉和雷达数据差别太大的情况
   # if no 'sane' match is found return -1
   # stationary radar points can be false positives
   dist_sane = abs(cluster.dRel - offset_vision_dist) < max([(offset_vision_dist)*.25, 5.0])
@@ -63,8 +66,8 @@ def match_vision_to_cluster(v_ego, lead, clusters):
   else:
     return None
 
-
 def get_lead(v_ego, ready, clusters, lead_msg, low_speed_override=True):
+  # 若雷达前车数据非空，视觉前车数据置信度大于0.5，则尝试融合视觉数据到雷达数据中
   # Determine leads, this is where the essential logic happens
   if len(clusters) > 0 and ready and lead_msg.prob > .5:
     cluster = match_vision_to_cluster(v_ego, lead_msg, clusters)
@@ -73,15 +76,17 @@ def get_lead(v_ego, ready, clusters, lead_msg, low_speed_override=True):
 
   lead_dict = {'status': False}
   if cluster is not None:
+    # 若雷达数据非空则按照雷达数据构造返回值
     lead_dict = cluster.get_RadarState(lead_msg.prob)
   elif (cluster is None) and ready and (lead_msg.prob > .5):
+    # 若雷达数据为空，且视觉数据置信度大于0.5则按照视觉数据构造返回值（视觉感知发现了雷达没有感知到的前车）
     lead_dict = Cluster().get_RadarState_from_vision(lead_msg, v_ego)
 
   if low_speed_override:
     low_speed_clusters = [c for c in clusters if c.potential_low_speed_lead(v_ego)]
     if len(low_speed_clusters) > 0:
       closest_cluster = min(low_speed_clusters, key=lambda c: c.dRel)
-
+      # 若当前处于蠕行模式，则不使用融合的前车数据，而使用雷达数据中距离最近的
       # Only choose new cluster if it is actually closer than the previous one
       if (not lead_dict['status']) or (closest_cluster.dRel < lead_dict['dRel']):
         lead_dict = closest_cluster.get_RadarState()
@@ -91,9 +96,8 @@ def get_lead(v_ego, ready, clusters, lead_msg, low_speed_override=True):
 
 class RadarD():
   def __init__(self, radar_ts, delay=0):
-    self.current_time = 0
-
     self.tracks = defaultdict(dict)
+    #radra_ts是当前车辆ACC雷达的采样周期，依次求得kalman滤波器相关参数
     self.kalman_params = KalmanParams(radar_ts)
 
     # v_ego
@@ -103,8 +107,6 @@ class RadarD():
     self.ready = False
 
   def update(self, sm, rr):
-    self.current_time = 1e-9*max(sm.logMonoTime.values())
-
     if sm.updated['carState']:
       self.v_ego = sm['carState'].vEgo
       self.v_ego_hist.append(self.v_ego)
@@ -112,6 +114,7 @@ class RadarD():
       self.ready = True
 
     ar_pts = {}
+    # 将rader_interface返回的rr中的数据读到ar_pts字典里
     for pt in rr.points:
       ar_pts[pt.trackId] = [pt.dRel, pt.yRel, pt.vRel, pt.measured]
 
@@ -130,6 +133,7 @@ class RadarD():
       # create the track if it doesn't exist or it's a new track
       if ids not in self.tracks:
         self.tracks[ids] = Track(v_lead, self.kalman_params)
+      # 
       self.tracks[ids].update(rpt[0], rpt[1], rpt[2], v_lead, rpt[3])
 
     idens = list(sorted(self.tracks.keys()))
