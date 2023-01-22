@@ -67,13 +67,22 @@ class LongControl:
     self.pid.reset()
     self.v_pid = v_pid
 
+  # long_plan参数：纵向规划模块优化后的规划。 accel_limits参数：当前车辆的ACC功能内提供的加速度上下限
+  # t_since_plan参数：此次调用距纵向规划模块发来该规划消息的时间
   def update(self, active, CS, long_plan, accel_limits, t_since_plan):
     """Update longitudinal control. This updates the state machine and runs a PID loop"""
     # Interp control trajectory
     speeds = long_plan.speeds
     if len(speeds) == CONTROL_N:
+      # 从规划中插值得道当前时刻需要达到的速度，加速度
       v_target_now = interp(t_since_plan, T_IDXS[:CONTROL_N], speeds)
       a_target_now = interp(t_since_plan, T_IDXS[:CONTROL_N], long_plan.accels)
+
+      # longitudinalActuatorDelayLowerBound的典型值是0.15s
+      # longitudinalActuatorDelayUpperBound的典型值是0.5s
+      # actuator的这种delay远大于t_since_plan（小于0.01s），所以以下计算希望“往后”看，根据更长期的规划来
+      # 以下算法核心思想是，用long_plan规划中的，当前时刻 delay_time 后的速度，与当前速度的差来再次考量加速度值 a_1,
+      # 并用启发式算法 2 * a_1 - a_target_now 来作为后续代码pid的加速度feedforward参数
 
       v_target_lower = interp(self.CP.longitudinalActuatorDelayLowerBound + t_since_plan, T_IDXS[:CONTROL_N], speeds)
       a_target_lower = 2 * (v_target_lower - v_target_now) / self.CP.longitudinalActuatorDelayLowerBound - a_target_now
@@ -81,6 +90,7 @@ class LongControl:
       v_target_upper = interp(self.CP.longitudinalActuatorDelayUpperBound + t_since_plan, T_IDXS[:CONTROL_N], speeds)
       a_target_upper = 2 * (v_target_upper - v_target_now) / self.CP.longitudinalActuatorDelayUpperBound - a_target_now
 
+      # 这里取min，可以让加速更温和，让减速刹车更激进
       v_target = min(v_target_lower, v_target_upper)
       a_target = min(a_target_lower, a_target_upper)
 
@@ -95,6 +105,7 @@ class LongControl:
     self.pid.pos_limit = accel_limits[1]
 
     output_accel = self.last_output_accel
+    # 纵向控制抓状态机的切换
     self.long_control_state = long_control_state_trans(self.CP, active, self.long_control_state, CS.vEgo,
                                                        v_target, v_target_1sec, CS.brakePressed,
                                                        CS.cruiseState.standstill)
@@ -114,6 +125,8 @@ class LongControl:
       self.reset(CS.vEgo)
 
     elif self.long_control_state == LongCtrlState.pid:
+      # 正常行使时，进入该分支
+
       self.v_pid = v_target_now
 
       # Toyota starts braking more when it thinks you want to stop
@@ -125,6 +138,7 @@ class LongControl:
 
       error = self.v_pid - CS.vEgo
       error_deadzone = apply_deadzone(error, deadzone)
+      # 调用pid计算加速度的控制量
       output_accel = self.pid.update(error_deadzone, speed=CS.vEgo,
                                      feedforward=a_target,
                                      freeze_integrator=freeze_integrator)
