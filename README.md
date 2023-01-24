@@ -10,3 +10,6 @@
 
 [radard.py](selfdrive/controls/radard.py)
 
+[longcontrol.py](selfdrive/controls/lib/longcontrol.py)
+
+[pid.py](selfdrive/controls/lib/pid.py)
