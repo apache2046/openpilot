@@ -762,7 +762,13 @@ class Controls:
 
     if not self.read_only and self.initialized:
       # send car controls over can
+      # CC(CarControl)结构中有需要发给车辆控制器的相关参数，如actuators.accel，actuators.steer
+      # CarControl结构体的详细信息可以参考car.capnp中的CarControl
+      # 这里通过CI(CarInterface，如selfdrive/car/hyundai/interface.py）中的apply函数，
+      # 调用到carcontroller（如selfdrive/car/hyundai/carcontroller.py）中的update函数，构造CAN命令
       self.last_actuators, can_sends = self.CI.apply(CC)
+      # self.CI.apply(CC)返回can_sends中有构造好的待发送的CAN命令
+      # 接下来通过sendcan消息，发送给boardd进程的can_send_thread，后者会使用libusb驱动panda设备进行CAN命令发送
       self.pm.send('sendcan', can_list_to_can_capnp(can_sends, msgtype='sendcan', valid=CS.canValid))
       CC.actuatorsOutput = self.last_actuators
       if self.CP.steerControlType == car.CarParams.SteerControlType.angle:
